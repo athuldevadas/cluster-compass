@@ -337,11 +337,13 @@ def apply_theme(theme_mode: str = "System") -> None:
 def style_plotly_figure(fig, theme_mode: str) -> None:
     palette = theme_palette("Dark" if theme_mode == "Dark" else "Light")
     fig.update_layout(
+        title={"text": ""},
         paper_bgcolor=palette["paper_bg"],
         plot_bgcolor=palette["plot_bg"],
         font_color=palette["ink"],
         title_font_color=palette["ink"],
         legend_font_color=palette["ink"],
+        legend_title_text="",
         margin=dict(l=10, r=10, t=20, b=10),
     )
     fig.update_xaxes(
@@ -902,12 +904,42 @@ def available_workloads(snapshot: dict[str, Any], namespace: str) -> list[dict[s
 
 
 def get_live_logs(client: KubeClient, context: str | None, namespace: str, pod: str, tail_lines: int, use_sample: bool, snapshot: dict[str, Any]) -> tuple[str | None, str | None]:
-    if use_sample:
-        key = f"{namespace}/{pod}"
-        sample_logs = snapshot.get("sample_logs", {})
-        return sample_logs.get(key, "No sample logs were bundled for this pod."), None
+    return get_live_logs_for_container(client, context, namespace, pod, None, tail_lines, use_sample, snapshot)
 
-    result = client.get_pod_logs(namespace=namespace, pod=pod, context=context, tail_lines=tail_lines)
+
+def get_pod_containers(snapshot: dict[str, Any], namespace: str, pod: str) -> list[str]:
+    for item in snapshot.get("pods", []):
+        metadata = item.get("metadata", {})
+        if metadata.get("namespace") != namespace or metadata.get("name") != pod:
+            continue
+        containers = item.get("spec", {}).get("containers", [])
+        names = [container.get("name", "") for container in containers if container.get("name")]
+        statuses = item.get("status", {}).get("containerStatuses", [])
+        status_names = [status.get("name", "") for status in statuses if status.get("name")]
+        merged: list[str] = []
+        for name in names + status_names:
+            if name and name not in merged:
+                merged.append(name)
+        return merged
+    return []
+
+
+def get_live_logs_for_container(
+    client: KubeClient,
+    context: str | None,
+    namespace: str,
+    pod: str,
+    container: str | None,
+    tail_lines: int,
+    use_sample: bool,
+    snapshot: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    if use_sample:
+        key = f"{namespace}/{pod}::{container or ''}".rstrip(":")
+        sample_logs = snapshot.get("sample_logs", {})
+        return sample_logs.get(key, "No sample logs were bundled for this pod/container."), None
+
+    result = client.get_pod_logs(namespace=namespace, pod=pod, context=context, container=container, tail_lines=tail_lines)
     if result.ok and result.data:
         return result.data.get("raw", ""), None
     return None, result.error or "Could not load logs."
@@ -918,12 +950,13 @@ def get_exec_output(
     context: str | None,
     namespace: str,
     pod: str,
+    container: str | None,
     command_text: str,
     use_sample: bool,
     snapshot: dict[str, Any],
 ) -> tuple[str | None, str | None]:
     if use_sample:
-        key = f"{namespace}/{pod}::{command_text.strip()}"
+        key = f"{namespace}/{pod}::{container or ''}::{command_text.strip()}".replace("::::", "::")
         sample_exec = snapshot.get("sample_exec", {})
         return sample_exec.get(key, "Demo mode: no bundled output for that command."), None
 
@@ -931,7 +964,7 @@ def get_exec_output(
     if not command:
         return None, "Enter a command to run inside the pod."
 
-    result = client.exec_in_pod(namespace=namespace, pod=pod, context=context, command=command)
+    result = client.exec_in_pod(namespace=namespace, pod=pod, context=context, container=container, command=command)
     if result.ok and result.data:
         return result.data.get("raw", ""), None
     return None, result.error or "Could not run the command in the pod."
@@ -972,21 +1005,22 @@ def ensure_sample_terminal() -> None:
     )
 
 
-def start_sample_terminal(pod_label: str, shell: str) -> None:
+def start_sample_terminal(pod_label: str, container: str | None, shell: str) -> None:
     ensure_sample_terminal()
     st.session_state["cluster_compass_sample_terminal"] = {
         "active": True,
         "pod": pod_label,
+        "container": container,
         "shell": shell,
         "history": [],
-        "output": f"Connected to {pod_label} using {shell}\n",
+        "output": f"Connected to {pod_label}{f' ({container})' if container else ''} using {shell}\n",
     }
 
 
-def send_sample_terminal_command(snapshot: dict[str, Any], pod_label: str, command_text: str) -> None:
+def send_sample_terminal_command(snapshot: dict[str, Any], pod_label: str, container: str | None, command_text: str) -> None:
     ensure_sample_terminal()
     sample_terminal = st.session_state["cluster_compass_sample_terminal"]
-    key = f"{pod_label}::{command_text.strip()}"
+    key = f"{pod_label}::{container or ''}::{command_text.strip()}".replace("::::", "::")
     sample_exec = snapshot.get("sample_exec", {})
     output = sample_exec.get(key, f"Demo shell executed: {command_text}")
     sample_terminal["history"].append(command_text)
@@ -1129,10 +1163,12 @@ def main() -> None:
 
         with right:
             if not workload_frame.empty:
+                workload_chart_frame = workload_frame.copy()
+                workload_chart_frame["Ready Units"] = workload_chart_frame["Ready"].str.split("/").str[0].astype(int)
                 fig = px.bar(
-                    workload_frame,
+                    workload_chart_frame,
                     x="Name",
-                    y=workload_frame["Ready"].str.split("/").str[0].astype(int),
+                    y="Ready Units",
                     color="Health",
                     hover_data=["Namespace", "Kind", "Ready"],
                     color_discrete_map={"Healthy": "#1f8a5b", "Degraded": "#d97706", "Critical": "#c2410c", "Idle": "#4c6b72"},
@@ -1265,14 +1301,33 @@ def main() -> None:
                 pod_labels = [f"{row.Namespace}/{row.Pod}" for row in pod_options.itertuples()]
                 chosen_pod_label = st.selectbox("Choose a pod", pod_labels)
                 chosen_namespace, chosen_pod = chosen_pod_label.split("/", 1)
+                log_containers = get_pod_containers(snapshot, chosen_namespace, chosen_pod)
+                selected_log_container = None
+                if log_containers:
+                    selected_log_container = st.selectbox("Choose a container", log_containers, key="logs_container_select")
                 tail_lines = st.select_slider("How many log lines", options=[50, 100, 200, 500], value=200)
                 if st.button("Load logs", use_container_width=True):
-                    logs, error = get_live_logs(client, selected_context, chosen_namespace, chosen_pod, tail_lines, use_sample, snapshot)
-                    st.session_state["cluster_compass_logs"] = {"text": logs, "error": error, "pod": chosen_pod_label}
+                    logs, error = get_live_logs_for_container(
+                        client,
+                        selected_context,
+                        chosen_namespace,
+                        chosen_pod,
+                        selected_log_container,
+                        tail_lines,
+                        use_sample,
+                        snapshot,
+                    )
+                    st.session_state["cluster_compass_logs"] = {
+                        "text": logs,
+                        "error": error,
+                        "pod": chosen_pod_label,
+                        "container": selected_log_container,
+                    }
 
                 log_state = st.session_state.get("cluster_compass_logs")
                 if log_state:
-                    st.caption(f"Showing logs for {log_state['pod']}")
+                    container_caption = f" / {log_state['container']}" if log_state.get("container") else ""
+                    st.caption(f"Showing logs for {log_state['pod']}{container_caption}")
                     if log_state.get("error"):
                         st.error(log_state["error"])
                     else:
@@ -1285,12 +1340,20 @@ def main() -> None:
             else:
                 exec_pod_label = st.selectbox("Pod for shell session", pod_labels, key="exec_pod_select")
                 exec_namespace, exec_pod = exec_pod_label.split("/", 1)
+                exec_containers = get_pod_containers(snapshot, exec_namespace, exec_pod)
+                selected_exec_container = None
+                if exec_containers:
+                    selected_exec_container = st.selectbox("Container for shell session", exec_containers, key="exec_container_select")
                 shell_choice = st.selectbox("Shell", ["/bin/sh", "/bin/bash"], index=0, key="shell_choice")
 
                 if use_sample:
                     ensure_sample_terminal()
                     sample_terminal = st.session_state["cluster_compass_sample_terminal"]
-                    sample_active = sample_terminal.get("active") and sample_terminal.get("pod") == exec_pod_label
+                    sample_active = (
+                        sample_terminal.get("active")
+                        and sample_terminal.get("pod") == exec_pod_label
+                        and sample_terminal.get("container") == selected_exec_container
+                    )
                     terminal_status_text = "Connected" if sample_active else "Not connected"
                     terminal_error = None
                 else:
@@ -1299,6 +1362,7 @@ def main() -> None:
                     session_matches = (
                         bool(live_session_id)
                         and st.session_state.get("cluster_compass_terminal_pod") == exec_pod_label
+                        and st.session_state.get("cluster_compass_terminal_container") == selected_exec_container
                     )
                     sample_active = False
                     terminal_status_text = "Connected" if session_open and session_matches else "Not connected"
@@ -1307,7 +1371,7 @@ def main() -> None:
                 with start_col:
                     if st.button("Start shell", use_container_width=True):
                         if use_sample:
-                            start_sample_terminal(exec_pod_label, shell_choice)
+                            start_sample_terminal(exec_pod_label, selected_exec_container, shell_choice)
                         else:
                             existing_session_id = st.session_state.get("cluster_compass_terminal_session")
                             if existing_session_id:
@@ -1316,6 +1380,7 @@ def main() -> None:
                                 namespace=exec_namespace,
                                 pod=exec_pod,
                                 context=selected_context,
+                                container=selected_exec_container,
                                 shell=shell_choice,
                             )
                             if error:
@@ -1323,6 +1388,7 @@ def main() -> None:
                             else:
                                 st.session_state["cluster_compass_terminal_session"] = session_id
                                 st.session_state["cluster_compass_terminal_pod"] = exec_pod_label
+                                st.session_state["cluster_compass_terminal_container"] = selected_exec_container
                                 st.session_state["cluster_compass_terminal_error"] = None
                                 st.session_state["cluster_compass_terminal_history"] = []
                                 st.rerun()
@@ -1336,6 +1402,7 @@ def main() -> None:
                                 terminal_manager.close_session(existing_session_id)
                             st.session_state["cluster_compass_terminal_session"] = None
                             st.session_state["cluster_compass_terminal_pod"] = None
+                            st.session_state["cluster_compass_terminal_container"] = None
                 with poll_col:
                     terminal_auto_refresh = st.checkbox("Auto refresh shell output", value=False, key="terminal_auto_refresh")
                     if terminal_auto_refresh:
@@ -1356,7 +1423,7 @@ def main() -> None:
                 run_disabled = terminal_status_text != "Connected"
                 if st.button("Send command", use_container_width=True, disabled=run_disabled):
                     if use_sample:
-                        send_sample_terminal_command(snapshot, exec_pod_label, command_text)
+                        send_sample_terminal_command(snapshot, exec_pod_label, selected_exec_container, command_text)
                     else:
                         session_id = st.session_state.get("cluster_compass_terminal_session")
                         error = terminal_manager.send_command(session_id, command_text) if session_id else "Terminal session not found."

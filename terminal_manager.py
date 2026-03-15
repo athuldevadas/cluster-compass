@@ -12,6 +12,7 @@ class TerminalSession:
     session_id: str
     namespace: str
     pod: str
+    container: str | None
     shell: str
     process: subprocess.Popen[str]
     output_lines: deque[str] = field(default_factory=lambda: deque(maxlen=400))
@@ -61,6 +62,7 @@ class TerminalManager:
             session_id=session_id,
             namespace=namespace,
             pod=pod,
+            container=container,
             shell=shell,
             process=process,
         )
@@ -142,4 +144,3 @@ class TerminalManager:
         if session.process.poll() is not None:
             session.is_open = False
         return session.is_open, None
-

@@ -46,47 +46,47 @@ def build_sample_snapshot() -> dict:
         "pods": [
             {
                 "metadata": {"name": "api-6b749f47cd-jmkq7", "namespace": "shop-prod", "creationTimestamp": _ts(12)},
-                "spec": {"nodeName": "node-a"},
+                "spec": {"nodeName": "node-a", "containers": [{"name": "api"}, {"name": "metrics-sidecar"}]},
                 "security_context_summary": {"runAsNonRoot": True, "automountServiceAccountToken": False},
                 "status": {
                     "phase": "Running",
-                    "containerStatuses": [{"restartCount": 1, "ready": True}],
+                    "containerStatuses": [{"name": "api", "restartCount": 1, "ready": True}, {"name": "metrics-sidecar", "restartCount": 0, "ready": True}],
                 },
             },
             {
                 "metadata": {"name": "web-59b4f94c96-4pnk6", "namespace": "shop-prod", "creationTimestamp": _ts(6)},
-                "spec": {"nodeName": "node-b"},
+                "spec": {"nodeName": "node-b", "containers": [{"name": "web"}]},
                 "security_context_summary": {"runAsNonRoot": True, "automountServiceAccountToken": False},
                 "status": {
                     "phase": "Running",
-                    "containerStatuses": [{"restartCount": 0, "ready": True}],
+                    "containerStatuses": [{"name": "web", "restartCount": 0, "ready": True}],
                 },
             },
             {
                 "metadata": {"name": "worker-844dbdfd9b-rq7nb", "namespace": "shop-prod", "creationTimestamp": _ts(3)},
-                "spec": {"nodeName": "node-b"},
+                "spec": {"nodeName": "node-b", "containers": [{"name": "worker"}]},
                 "security_context_summary": {"runAsNonRoot": False, "automountServiceAccountToken": True},
                 "status": {
                     "phase": "CrashLoopBackOff",
-                    "containerStatuses": [{"restartCount": 7, "ready": False}],
+                    "containerStatuses": [{"name": "worker", "restartCount": 7, "ready": False}],
                 },
             },
             {
                 "metadata": {"name": "payments-api-67759cd8bb-j2fdp", "namespace": "shop-staging", "creationTimestamp": _ts(9)},
-                "spec": {"nodeName": "node-c"},
+                "spec": {"nodeName": "node-c", "containers": [{"name": "payments-api"}, {"name": "istio-proxy"}]},
                 "security_context_summary": {"runAsNonRoot": False, "automountServiceAccountToken": True},
                 "status": {
                     "phase": "Pending",
-                    "containerStatuses": [{"restartCount": 0, "ready": False}],
+                    "containerStatuses": [{"name": "payments-api", "restartCount": 0, "ready": False}, {"name": "istio-proxy", "restartCount": 0, "ready": False}],
                 },
             },
             {
                 "metadata": {"name": "prometheus-server-0", "namespace": "monitoring", "creationTimestamp": _ts(48)},
-                "spec": {"nodeName": "node-a"},
+                "spec": {"nodeName": "node-a", "containers": [{"name": "prometheus-server"}]},
                 "security_context_summary": {"runAsNonRoot": True, "automountServiceAccountToken": True},
                 "status": {
                     "phase": "Running",
-                    "containerStatuses": [{"restartCount": 0, "ready": True}],
+                    "containerStatuses": [{"name": "prometheus-server", "restartCount": 0, "ready": True}],
                 },
             },
         ],
@@ -232,12 +232,14 @@ def build_sample_snapshot() -> dict:
             {"name": "prometheus", "namespace": "monitoring", "revision": "8", "updated": "2026-03-15 16:50:00", "status": "deployed", "chart": "kube-prometheus-stack-61.3.2", "app_version": "0.75.2"},
         ],
         "sample_logs": {
-            "shop-prod/api-6b749f47cd-jmkq7": "2026-03-15T17:50:01Z INFO API started\n2026-03-15T17:50:08Z INFO Connected to database\n2026-03-15T17:50:15Z INFO Health check passed",
-            "shop-prod/worker-844dbdfd9b-rq7nb": "2026-03-15T17:58:02Z ERROR Failed to connect to queue\n2026-03-15T17:58:05Z ERROR Retrying job processor\n2026-03-15T17:58:09Z FATAL Worker crashed with exit code 1",
+            "shop-prod/api-6b749f47cd-jmkq7::api": "2026-03-15T17:50:01Z INFO API started\n2026-03-15T17:50:08Z INFO Connected to database\n2026-03-15T17:50:15Z INFO Health check passed",
+            "shop-prod/api-6b749f47cd-jmkq7::metrics-sidecar": "2026-03-15T17:50:02Z INFO metrics exporter ready\n2026-03-15T17:50:07Z INFO scraping /metrics",
+            "shop-prod/worker-844dbdfd9b-rq7nb::worker": "2026-03-15T17:58:02Z ERROR Failed to connect to queue\n2026-03-15T17:58:05Z ERROR Retrying job processor\n2026-03-15T17:58:09Z FATAL Worker crashed with exit code 1",
         },
         "sample_exec": {
-            "shop-prod/api-6b749f47cd-jmkq7::printenv": "APP_ENV=production\nLOG_LEVEL=info\nPORT=8080",
-            "shop-prod/api-6b749f47cd-jmkq7::ls /app": "main.py\nconfig.py\nrequirements.txt\nhandlers/",
-            "shop-prod/worker-844dbdfd9b-rq7nb::ps aux": "PID   USER     TIME  COMMAND\n1     root     0:00  python worker.py\n37    root     0:00  sh -c ps aux",
+            "shop-prod/api-6b749f47cd-jmkq7::api::printenv": "APP_ENV=production\nLOG_LEVEL=info\nPORT=8080",
+            "shop-prod/api-6b749f47cd-jmkq7::api::ls /app": "main.py\nconfig.py\nrequirements.txt\nhandlers/",
+            "shop-prod/api-6b749f47cd-jmkq7::metrics-sidecar::printenv": "SCRAPE_PORT=9090\nSCRAPE_PATH=/metrics",
+            "shop-prod/worker-844dbdfd9b-rq7nb::worker::ps aux": "PID   USER     TIME  COMMAND\n1     root     0:00  python worker.py\n37    root     0:00  sh -c ps aux",
         },
     }

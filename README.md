@@ -65,6 +65,7 @@ http://localhost:8501
 - Pod log viewer
 - Pod exec command runner for quick in-container checks
 - Persistent pod shell session with command history
+- Container selector for multi-container pods in logs and shell access
 - Rollout status and restart actions for Deployments, StatefulSets, and DaemonSets
 - Helm release inventory
 - RBAC review for RoleBindings and ClusterRoleBindings
@@ -87,6 +88,8 @@ http://localhost:8501
 - This version is mostly read-only, with one operator action: rollout restart for supported workloads.
 - Destructive actions are intentionally guarded. Delete stays locked until the exact resource name is typed.
 - The live shell uses `kubectl exec -i` and is designed for quick operational checks, not a full SSH-style terminal emulator.
+- If a pod has multiple containers, select the exact container before viewing logs or opening a shell session.
+- Under the hood, the app uses the standard Kubernetes container targeting flags like `kubectl logs -c <container>` and `kubectl exec -c <container>`.
 - The rollout restart action is available when connected to a live cluster and uses your current `kubectl` permissions.
 - Secret values are not decoded or exposed by the app.
 - Some resource types may be empty depending on what is installed in your cluster.
