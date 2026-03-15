@@ -43,6 +43,23 @@ def save_ui_settings(settings: dict[str, Any]) -> None:
         pass
 
 
+def initialize_theme_state() -> None:
+    if "theme_mode" in st.session_state:
+        return
+    settings = load_ui_settings()
+    saved_theme_mode = settings.get("theme_mode", "System")
+    st.session_state["theme_mode"] = saved_theme_mode if saved_theme_mode in {"System", "Light", "Dark"} else "System"
+    st.session_state["theme_selector"] = st.session_state["theme_mode"]
+
+
+def handle_theme_change() -> None:
+    selected = st.session_state.get("theme_selector", "System")
+    st.session_state["theme_mode"] = selected
+    settings = load_ui_settings()
+    settings["theme_mode"] = selected
+    save_ui_settings(settings)
+
+
 def theme_palette(theme_mode: str = "System") -> dict[str, str]:
     light = {
         "ink": "#12343b",
@@ -118,7 +135,7 @@ def apply_theme(theme_mode: str = "System") -> None:
             --input-bg: #ffffff;
             color-scheme: light;
         }
-        @media (prefers-color-scheme: dark) {{
+        @media (prefers-color-scheme: dark) {
             :root {
                 --ink: #edf6f1;
                 --muted: #b7ccc4;
@@ -143,7 +160,7 @@ def apply_theme(theme_mode: str = "System") -> None:
                 --input-bg: rgba(19, 35, 34, 0.98);
                 color-scheme: dark;
             }
-        }}
+        }
         """
     else:
         palette = theme_palette(theme_mode)
@@ -284,6 +301,29 @@ def apply_theme(theme_mode: str = "System") -> None:
         }
         [data-testid="stTabs"] button[aria-selected="true"] {
             color: var(--accent) !important;
+        }
+        .stButton > button {
+            background: var(--panel) !important;
+            color: var(--ink) !important;
+            border: 1px solid var(--line) !important;
+        }
+        .stButton > button p,
+        .stButton > button span,
+        .stButton > button div {
+            color: inherit !important;
+        }
+        .stButton > button[kind="primary"] {
+            background: var(--accent) !important;
+            color: #ffffff !important;
+            border-color: var(--accent) !important;
+        }
+        .stButton > button[kind="primary"] p,
+        .stButton > button[kind="primary"] span,
+        .stButton > button[kind="primary"] div {
+            color: #ffffff !important;
+        }
+        .stButton > button:hover {
+            border-color: var(--accent) !important;
         }
         </style>
         """
@@ -963,14 +1003,14 @@ def close_sample_terminal() -> None:
 
 
 def main() -> None:
+    initialize_theme_state()
+    apply_theme(st.session_state["theme_mode"])
+
     client = KubeClient()
     terminal_manager = get_terminal_manager()
     contexts = client.get_contexts() if client.is_available() else []
     current_context = client.get_current_context()
-    settings = load_ui_settings()
     theme_options = ["System", "Light", "Dark"]
-    saved_theme_mode = settings.get("theme_mode", "System")
-    default_theme_index = theme_options.index(saved_theme_mode) if saved_theme_mode in theme_options else 0
 
     with st.sidebar:
         st.markdown("## Cluster Compass")
@@ -978,10 +1018,7 @@ def main() -> None:
 
         live_available = client.is_available()
         use_sample = st.toggle("Use demo data", value=not live_available, help="Turn this on to explore the app without a live cluster.")
-        theme_mode = st.selectbox("Theme", theme_options, index=default_theme_index)
-        if theme_mode != saved_theme_mode:
-            settings["theme_mode"] = theme_mode
-            save_ui_settings(settings)
+        st.selectbox("Theme", theme_options, key="theme_selector", on_change=handle_theme_change)
 
         selected_context = None
         if contexts and not use_sample:
@@ -998,7 +1035,6 @@ def main() -> None:
             st.cache_data.clear()
             st.rerun()
 
-    apply_theme(theme_mode)
     st.title("")
 
     snapshot, warnings = load_snapshot(selected_context, use_sample)
@@ -1085,7 +1121,7 @@ def main() -> None:
                         "CrashLoopBackOff": "#c2410c",
                     },
                 )
-                style_plotly_figure(fig, theme_mode)
+                style_plotly_figure(fig, st.session_state["theme_mode"])
                 fig.update_layout(height=340)
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1101,7 +1137,7 @@ def main() -> None:
                     hover_data=["Namespace", "Kind", "Ready"],
                     color_discrete_map={"Healthy": "#1f8a5b", "Degraded": "#d97706", "Critical": "#c2410c", "Idle": "#4c6b72"},
                 )
-                style_plotly_figure(fig, theme_mode)
+                style_plotly_figure(fig, st.session_state["theme_mode"])
                 fig.update_layout(height=340, xaxis_title="Workload", yaxis_title="Ready units")
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -1368,6 +1404,12 @@ def main() -> None:
             option_labels = [f"{item['namespace']} / {item['kind']} / {item['name']}" for item in rollout_options]
             selected_rollout = st.selectbox("Choose a workload", option_labels)
             selected_item = rollout_options[option_labels.index(selected_rollout)]
+            restart_confirmation = st.text_input(
+                "Type the workload name to allow restart",
+                placeholder=selected_item["name"],
+                key="restart_rollout_confirmation",
+            )
+            restart_enabled = restart_confirmation == selected_item["name"] and bool(selected_item["name"])
             action_col1, action_col2 = st.columns(2)
             with action_col1:
                 if st.button("Check rollout status", use_container_width=True):
@@ -1382,7 +1424,7 @@ def main() -> None:
                         )
                         st.session_state["cluster_compass_rollout"] = result.data.get("raw", "") if result.ok and result.data else result.error
             with action_col2:
-                if st.button("Restart rollout", use_container_width=True, type="primary"):
+                if st.button("Restart rollout", use_container_width=True, type="primary", disabled=not restart_enabled):
                     if use_sample:
                         st.session_state["cluster_compass_rollout"] = "Demo mode: rollout restart simulated successfully."
                     else:
@@ -1393,6 +1435,8 @@ def main() -> None:
                             context=selected_context,
                         )
                         st.session_state["cluster_compass_rollout"] = result.data.get("raw", "") if result.ok and result.data else result.error
+                if not restart_enabled:
+                    st.caption("Restart stays locked until the exact workload name is typed.")
 
             rollout_message = st.session_state.get("cluster_compass_rollout")
             if rollout_message:
